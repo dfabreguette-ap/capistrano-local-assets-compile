@@ -1,13 +1,9 @@
-# Original source: https://coderwall.com/p/aridag
 
-
-# set the locations that we will look for changed assets to determine whether to precompile
-set :assets_dependencies, %w(app/assets lib/assets vendor/assets Gemfile.lock config/routes.rb)
+set :assets_dependencies, %w(app/assets app/assets/templates lib/assets vendor/assets Gemfile.lock config/routes.rb)
 
 # clear the previous precompile task
 Rake::Task["deploy:assets:precompile"].clear_actions
-class PrecompileRequired < StandardError;
-end
+class PrecompileRequired < StandardError; end
 
 namespace :deploy do
   namespace :assets do
@@ -17,7 +13,7 @@ namespace :deploy do
         within release_path do
           with rails_env: fetch(:rails_env) do
             begin
-	      # find the most recent release
+              # find the most recent release
               latest_release = capture(:ls, '-xr', releases_path).split[1]
 
               # precompile if this is the first deploy
@@ -26,35 +22,49 @@ namespace :deploy do
               latest_release_path = releases_path.join(latest_release)
 
               # precompile if the previous deploy failed to finish precompiling
-              execute(:ls, latest_release_path.join('assets_manifest_backup')) rescue raise(PrecompileRequired)
+              execute(:ls, shared_path.join('assets','manifest*.json')) rescue raise(PrecompileRequired)
 
               fetch(:assets_dependencies).each do |dep|
-		release = release_path.join(dep)
-		latest = latest_release_path.join(dep)
-		
-		# skip if both directories/files do not exist
-		next if [release, latest].map{|d| test "[ -e #{d} ]"}.uniq == [false]
-		
                 # execute raises if there is a diff
-                execute(:diff, '-Nqr', release, latest) rescue raise(PrecompileRequired)
+                execute(:diff, '-Naur', release_path.join(dep), latest_release_path.join(dep)) rescue raise(PrecompileRequired)
               end
 
-              info("Skipping asset precompile, no asset diff found")
+              puts("Skipping asset precompile, no asset diff found")
 
               # copy over all of the assets from the last release
-              release_asset_path = release_path.join('public', fetch(:assets_prefix))
-              # skip if assets directory is symlink
-              begin
-                execute(:test, '-L', release_asset_path.to_s)
-              rescue
-                execute(:cp, '-r', latest_release_path.join('public', fetch(:assets_prefix)), release_asset_path.parent)
-              end
+              # This is useless as public/assets is symlinked !
+              # execute(:cp, '-r', latest_release_path.join('public', fetch(:assets_prefix)), release_path.join('public', fetch(:assets_prefix)))
 
-              # copy assets if manifest file is not exist (this is first deploy after using symlink)
-              execute(:ls, release_asset_path.join('manifest*')) rescue raise(PrecompileRequired)
+              # raise PrecompileRequired
 
             rescue PrecompileRequired
-              execute(:rake, "assets:precompile")
+              # execute(:rake, "assets:precompile")
+
+
+              puts "Compiling assets locally"
+              %x{EXECJS_RUNTIME='Node' JRUBY_OPTS="-J-d32 -X-C" bundle exec rake assets:precompile assets:clean}
+
+              local_manifest_path = %x{ls ./public/assets/manifest*.json}.strip
+
+              on roles(:app) do |server|
+
+                execute(:mv, "#{shared_path}/public/assets/", "#{shared_path}/public/oldassets/")
+
+                info "Pushing assets to #{server.hostname}"
+                info "executing : 'rsync -av ./public/assets/ #{server.user}@#{server.hostname}:#{shared_path}/public/assets/"
+                %x{rsync -av ./public/assets/ #{server.user}@#{server.hostname}:#{shared_path}/public/assets/}
+
+                info "Pushing assets manifest to #{server.hostname}"
+                info "executing : 'rsync -av #{local_manifest_path} #{server.user}@#{server.hostname}:#{shared_path}/assets_manifest#{File.extname(local_manifest_path)}'"
+                %x{rsync -av #{local_manifest_path} #{server.user}@#{server.hostname}:#{shared_path}/assets_manifest#{File.extname(local_manifest_path)}}
+
+                info "Removing remote assets files"
+                execute(:rm, '-rf', "#{shared_path}/public/oldassets/")
+              end
+
+              puts "Cleanning assets locally"
+              %x{bundle exec rake assets:clobber}
+
             end
           end
         end
