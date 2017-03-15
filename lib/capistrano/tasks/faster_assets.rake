@@ -48,18 +48,20 @@ namespace :deploy do
 
               on roles(:app) do |server|
 
-                execute(:mv, "#{shared_path}/public/assets/", "#{shared_path}/public/oldassets/")
-
                 info "Pushing assets to #{server.hostname}"
                 info "executing : 'rsync -av ./public/assets/ #{server.user}@#{server.hostname}:#{shared_path}/public/assets/"
-                %x{rsync -av ./public/assets/ #{server.user}@#{server.hostname}:#{shared_path}/public/assets/}
+                %x{rsync -av ./public/assets/ #{server.user}@#{server.hostname}:#{shared_path}/public/new-assets/}
 
+                # Replace assets once it's uploaded !
+                execute(:rm, '-rf', "#{shared_path}/public/assets/")
+                execute(:mv, "#{shared_path}/public/new-assets/", "#{shared_path}/public/assets/")
+
+                # Then replace manifest file to trigger cache refresh
                 info "Pushing assets manifest to #{server.hostname}"
                 info "executing : 'rsync -av #{local_manifest_path} #{server.user}@#{server.hostname}:#{shared_path}/assets_manifest#{File.extname(local_manifest_path)}'"
                 %x{rsync -av #{local_manifest_path} #{server.user}@#{server.hostname}:#{shared_path}/assets_manifest#{File.extname(local_manifest_path)}}
 
                 info "Removing remote assets files"
-                execute(:rm, '-rf', "#{shared_path}/public/oldassets/")
               end
 
               puts "Cleanning assets locally"
